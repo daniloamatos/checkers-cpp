@@ -1,0 +1,6 @@
+# Local CMake build output
+/build/
+/cmake-build-*/
+
+# Editor settings
+/.vscode/
