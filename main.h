@@ -4,6 +4,8 @@
 #include <array>
 #include <vector>
 #include <cstddef> 
+#include <chrono>
+#include <atomic>
 
 struct Board {
     std::uint64_t byType[3]; 
@@ -49,7 +51,13 @@ struct MoveList {
     }
 };
 
+struct SearchControl {
+    std::chrono::steady_clock::time_point deadline;
+    bool interrupted = false;
+    const std::atomic<bool>* cancelled = nullptr;
+};
+
 void setSquare(Board& board, std::uint8_t square, std::uint8_t piece);
 MoveList generateMoves(Board& board, std::uint8_t color);
 void makeMove(Board& board, const Move& move);
-int negamax(Board board, std::uint8_t depth, std::uint8_t color, Move* bestMove = nullptr);
+int negamax(Board board, int depth, std::uint8_t color, int alpha, int beta, Move* bestMove, int ply, SearchControl* control = nullptr);

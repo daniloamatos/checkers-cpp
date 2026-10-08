@@ -4,6 +4,7 @@
 #include <limits>
 
 
+// Score the position from the current player's perspective.
 int evaluate(const Board& board, std::uint8_t color)
 {
     const std::uint64_t own = board.byColor[color];
@@ -17,33 +18,86 @@ int evaluate(const Board& board, std::uint8_t color)
         __builtin_popcountll(own & board.byType[KING]) -
         __builtin_popcountll(enemy & board.byType[KING]);
 
-    return men * 100 + kings * 175;
+    // Give men a small bonus for getting closer to promotion.
+    auto advancement = [&](std::uint8_t side)
+    {
+        int bonus = 0;
+        std::uint64_t pieces = board.byColor[side] & board.byType[MAN];
+        while (pieces)
+        {
+            const int row = __builtin_ctzll(pieces) / 8;
+            bonus += (side == WHITEPIECE ? 7 - row : row) * 3;
+            pieces &= pieces - 1;
+        }
+        return bonus;
+    };
+
+    return men * 100 + kings * 175 + advancement(color) - advancement(color ^ 1);
 }
 
-int negamax(Board board, std::uint8_t depth, std::uint8_t color,  Move* bestMove)
+// Try valuable captures and promotions first to help alpha-beta cut sooner.
+int movePriority(const Board& board, const Move& move)
 {
+    const int men = __builtin_popcountll(move.capturedPieces & board.byType[MAN]);
+    const int kings = __builtin_popcountll(move.capturedPieces & board.byType[KING]);
+    int priority = men * 100 + kings * 175;
+
+    const std::uint8_t piece = board.squares[move.from];
+    const std::uint8_t color = piece >> 3;
+    if ((piece & 7) == MAN && (color == WHITEPIECE ? move.to < 8 : move.to >= 56))
+        priority += 75;
+
+    return priority;
+}
+
+int negamax(Board board, int depth, std::uint8_t color, int alpha, int beta, Move* bestMove, int ply, SearchControl* control)
+{
+    // Discard unfinished searches when the time runs out.
+    if (control && (control->interrupted ||
+        (control->cancelled && control->cancelled->load()) ||
+        std::chrono::steady_clock::now() >= control->deadline))
+    {
+        control->interrupted = true;
+        return 0;
+    }
     MoveList moves = generateMoves(board, color);
     int maxEval = -100000;
     if (moves.count == 0)
     {
-        return -100000;
+        // Prefer faster wins and postpone unavoidable losses.
+        return -100000 + ply;
     }
-    if (depth == 0)
+    if (depth <= 0)
     {
         return evaluate(board, color);
     }
+
+    // Keep the original order when priorities are equal.
+    std::stable_sort(moves.moves.begin(), moves.moves.begin() + moves.count,
+        [&board](const Move& left, const Move& right)
+        {
+            return movePriority(board, left) > movePriority(board, right);
+        });
+
     for (std::size_t i = 0; i < moves.count; ++i)
     {
         Board nextBoard = board;
         makeMove(nextBoard, moves.moves[i]);
 
-        int score = -negamax(nextBoard, depth - 1 , color ^ 1);
+        // Switch perspective and reverse the search limits.
+        int score = -negamax(nextBoard, depth - 1, color ^ 1, -beta, -alpha, nullptr, ply + 1, control);
+        if (control && control->interrupted)
+            return 0;
         if (score > maxEval)
         {
             maxEval = score;
             if (bestMove != nullptr)
                 *bestMove = moves.moves[i];
         }
+        // Stop when the opponent would avoid this branch.
+        alpha = std::max(alpha, score);
+        if (alpha >= beta)
+            break;
     }
     return maxEval;
 };
@@ -107,7 +161,7 @@ CaptureOrigins findCaptures(const Board& board, std::uint8_t color, std::uint64_
 
 void generateCaptureSequences(Board board, std::uint8_t color, Move sequence, MoveList& moves)
 {
-    // Simulate the full sequence without changing the actual game.
+    // Rebuild the accumulated sequence from the original board.
     Board nextBoard = board;
     std::uint8_t piece = board.squares[sequence.from];
 
@@ -149,6 +203,7 @@ void generateCaptureSequences(Board board, std::uint8_t color, Move sequence, Mo
             nextSequence.to = nextTo;
             nextSequence.capturedPieces |= 1ULL << capturedSquare;
             nextSequence.landingSquares |= 1ULL << nextTo;
+            // Keep the original board so each branch starts from the same position.
             generateCaptureSequences(board, color, nextSequence, moves);
         }
     }

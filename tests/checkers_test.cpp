@@ -3,6 +3,7 @@
 #include <cassert>
 #include <iostream>
 #include <random>
+#include <future>
 #include <set>
 #include <tuple>
 
@@ -98,6 +99,103 @@ void verify(Board board, int color)
 
 int main()
 {
+    // Equal progress is neutral; advancing a man helps only its own side.
+    Board progress{};
+    setSquare(progress, 42, MAN);
+    setSquare(progress, 21, (BLACKPIECE << 3) | MAN);
+    assert(negamax(progress, 0, WHITEPIECE, -100001, 100001, nullptr, 0) == 0);
+    setSquare(progress, 42, 0);
+    setSquare(progress, 35, MAN);
+    assert(negamax(progress, 0, WHITEPIECE, -100001, 100001, nullptr, 0) == 3);
+    assert(negamax(progress, 0, BLACKPIECE, -100001, 100001, nullptr, 0) == -3);
+    setSquare(progress, 35, KING);
+    setSquare(progress, 21, (BLACKPIECE << 3) | KING);
+    assert(negamax(progress, 0, WHITEPIECE, -100001, 100001, nullptr, 0) == 0);
+
+    // Choose a win in three plies over a win in five.
+    Board fastWin{};
+    for (int square : {5, 44, 60}) setSquare(fastWin, square, KING);
+    for (int square : {14, 37}) setSquare(fastWin, square, (BLACKPIECE << 3) | KING);
+    Move bestWin = generateMoves(fastWin, WHITEPIECE).moves[0];
+    assert(negamax(fastWin, 5, WHITEPIECE, -100001, 100001, &bestWin, 0) == 99997);
+    assert(bestWin.from == 5 && bestWin.to == 23);
+
+    // Completed timed searches agree with an unrestricted search.
+    SearchControl completed{std::chrono::steady_clock::now() + std::chrono::seconds(30)};
+    Move timedBest = generateMoves(fastWin, WHITEPIECE).moves[0];
+    assert(negamax(fastWin, 5, WHITEPIECE, -100001, 100001, &timedBest, 0, &completed) == 99997);
+    assert(!completed.interrupted);
+    assert(timedBest.from == bestWin.from && timedBest.to == bestWin.to);
+
+    // An expired deadline leaves the last completed choice untouched.
+    SearchControl expired{std::chrono::steady_clock::now() - std::chrono::seconds(1)};
+    Move candidate = timedBest;
+    assert(negamax(fastWin, 6, WHITEPIECE, -100001, 100001, &candidate, 0, &expired) == 0);
+    assert(expired.interrupted);
+    assert(candidate.from == timedBest.from && candidate.to == timedBest.to);
+
+    // A timeout inside the tree propagates back instead of becoming a score.
+    Board longSearch{};
+    setSquare(longSearch, 17, KING);
+    setSquare(longSearch, 46, (BLACKPIECE << 3) | KING);
+    SearchControl limited{std::chrono::steady_clock::now() + std::chrono::milliseconds(5)};
+    assert(negamax(longSearch, 50, WHITEPIECE, -100001, 100001, nullptr, 0, &limited) == 0);
+    assert(limited.interrupted);
+
+    // A background search can be cancelled without changing the game board.
+    std::atomic<bool> cancelled{false};
+    std::promise<void> started;
+    auto startedFuture = started.get_future();
+    auto search = std::async(std::launch::async, [&]() {
+        SearchControl control{std::chrono::steady_clock::now() + std::chrono::seconds(30), false, &cancelled};
+        started.set_value();
+        negamax(longSearch, 50, WHITEPIECE, -100001, 100001, nullptr, 0, &control);
+        return control.interrupted;
+    });
+    startedFuture.wait();
+    cancelled.store(true);
+    assert(search.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    assert(search.get());
+    assert(longSearch.squares[17] == KING);
+    assert(longSearch.squares[46] == ((BLACKPIECE << 3) | KING));
+
+    // Same endpoint, different captures: either option must remain playable.
+    Board alternatives{};
+    setSquare(alternatives, 21, KING);
+    for (int square : {1, 7, 10, 12, 14, 26, 28, 33, 37, 44, 56, 58})
+        setSquare(alternatives, square, (BLACKPIECE << 3) | KING);
+    auto options = generateMoves(alternatives, WHITEPIECE);
+    bool shortRoute = false, longRoute = false;
+    for (std::size_t i = 0; i < options.count; ++i)
+    {
+        const Move move = options.moves[i];
+        if (move.from != 21 || move.to != 53) continue;
+        Board after = alternatives;
+        makeMove(after, move);
+        assert(after.squares[53] == KING && after.squares[21] == 0);
+        if (move.capturedPieces == ((1ULL << 28) | (1ULL << 44)))
+        {
+            shortRoute = true;
+            assert(after.squares[28] == 0 && after.squares[44] == 0);
+            assert(after.squares[10] != 0 && after.squares[12] != 0 && after.squares[26] != 0);
+        }
+        if (move.capturedPieces == ((1ULL << 10) | (1ULL << 12) | (1ULL << 26) | (1ULL << 44)))
+        {
+            longRoute = true;
+            assert(after.squares[28] != 0);
+            assert(after.squares[10] == 0 && after.squares[12] == 0 && after.squares[26] == 0 && after.squares[44] == 0);
+        }
+    }
+    assert(shortRoute && longRoute);
+
+    // When every move loses, choose four plies over two.
+    Board slowLoss{};
+    for (int square : {37, 53, 60}) setSquare(slowLoss, square, KING);
+    for (int square : {44, 46}) setSquare(slowLoss, square, (BLACKPIECE << 3) | KING);
+    Move bestDefense = generateMoves(slowLoss, BLACKPIECE).moves[0];
+    assert(negamax(slowLoss, 5, BLACKPIECE, -100001, 100001, &bestDefense, 0) == -99996);
+    assert(bestDefense.from == 44 && bestDefense.to == 62);
+
     Board cycle{};
     setSquare(cycle, 42, KING);
     for (int square : {35, 19, 17, 33}) setSquare(cycle, square, (BLACKPIECE << 3) | MAN);
