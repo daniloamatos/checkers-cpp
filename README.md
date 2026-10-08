@@ -1,24 +1,24 @@
 # Checkers
 
-Um jogo de damas para desktop, feito em C++17 com raylib. O jogo tem uma interface gráfica, peças em SVG e um oponente controlado pelo computador.
+A desktop checkers (draughts) game built with C++17 and raylib. The game features a graphical interface, SVG pieces, and a computer-controlled opponent.
 
-## Requisitos
+## Requirements
 
-- CMake 3.16 ou mais recente
-- Compilador C++17 (GCC/Clang no Linux ou Visual Studio no Windows)
+- CMake 3.16 or newer
+- C++17 compiler (GCC/Clang on Linux or Visual Studio on Windows)
 - [raylib](https://www.raylib.com/)
 - [LunaSVG](https://github.com/sammycage/lunasvg)
 
-## Compilar no Linux
+## Building on Linux
 
-No Debian ou Ubuntu, instale as ferramentas de compilação e raylib:
+On Debian or Ubuntu, install the build tools and raylib:
 
 ```bash
 sudo apt update
 sudo apt install build-essential cmake pkg-config libraylib-dev
 ```
 
-Instale LunaSVG localmente:
+Install LunaSVG locally:
 
 ```bash
 cmake -S lunasvg -B lunasvg/build -DCMAKE_INSTALL_PREFIX="$HOME/.local"
@@ -26,28 +26,28 @@ cmake --build lunasvg/build
 cmake --install lunasvg/build
 ```
 
-Configure e compile o jogo:
+Configure and build the game:
 
 ```bash
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/.local" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-Execute:
+Run it:
 
 ```bash
 ./build/main
 ```
 
-## Compilar no Windows
+## Building on Windows
 
-Instale o Visual Studio com o componente **Desenvolvimento para desktop com C++**, o CMake e o [vcpkg](https://github.com/microsoft/vcpkg). No PowerShell, instale as dependências usando o triplet correspondente à arquitetura desejada. Exemplo para Windows 64-bit:
+Install Visual Studio with the **Desktop development with C++** workload, CMake, and [vcpkg](https://github.com/microsoft/vcpkg). In PowerShell, install the dependencies using the triplet that matches your target architecture. Example for 64-bit Windows:
 
 ```powershell
 vcpkg install raylib lunasvg --triplet x64-windows
 ```
 
-Configure e compile a partir da raiz do repositório. Substitua o caminho abaixo pelo diretório onde o vcpkg foi instalado:
+Configure and build from the repository root. Replace the path below with the directory where vcpkg is installed:
 
 ```powershell
 cmake -S . -B build `
@@ -56,26 +56,25 @@ cmake -S . -B build `
 cmake --build build --config Release
 ```
 
-Com o gerador padrão do Visual Studio, o executável ficará em `build\Release\main.exe`. Para iniciar pelo PowerShell:
+With the default Visual Studio generator, the executable will be located at `build\Release\main.exe`. To launch it from PowerShell:
 
 ```powershell
 .\build\Release\main.exe
 ```
 
-## Recursos e controles
+## Features and Controls
 
-- Clique nas casas para selecionar e mover as peças.
-- Quando houver mais de uma possibilidade de captura, escolha uma das opções exibidas na tela.
-- Pressione **F11** para alternar o modo de tela cheia.
-- Use **Restart** na tela de fim de jogo para começar outra partida.
+- Click on the squares to select and move pieces.
+- When there is more than one possible capture, choose one of the options shown on screen.
+- Press **F11** to toggle fullscreen mode.
+- Use **Restart** on the game over screen to start a new match.
 
-O CMake copia automaticamente a pasta `vectors` para o diretório do executável. Mantenha essa pasta junto do programa ao distribuir ou mover o executável.
+CMake automatically copies the `vectors` folder to the executable's directory. Keep this folder alongside the program when distributing or moving the executable.
 
-## Estrutura
+## Structure
 
-- `main.cpp`, `main.h`: interface, desenho e fluxo da partida.
-- `checkers.cpp`: regras e busca de jogadas.
-- `tests/checkers_test.cpp`: testes das regras.
-- `vectors/`: imagens SVG das peças.
-- `lunasvg/`: código-fonte vendorizado da biblioteca LunaSVG.
-
+- `main.cpp`, `main.h`: interface, rendering, and game flow.
+- `checkers.cpp`: rules and move search.
+- `tests/checkers_test.cpp`: rules tests.
+- `vectors/`: SVG images of the pieces.
+- `lunasvg/`: vendored source code of the LunaSVG library.
