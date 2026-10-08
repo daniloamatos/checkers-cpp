@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <array>
+#include <vector>
 #include <cstddef> 
 
 struct Board {
@@ -31,11 +32,13 @@ struct Move {
 struct MoveList {
     static constexpr std::size_t capacity = 12 * 13;
 
-    std::array<Move, capacity> moves;
+    std::vector<Move> moves = std::vector<Move>(capacity);
     std::size_t count = 0;
 
     void add(Move move)
     {
+        if (count == moves.size())
+            moves.resize(moves.size() * 2);
         moves.at(count) = move;
         ++count;
     }
@@ -48,5 +51,5 @@ struct MoveList {
 
 void setSquare(Board& board, std::uint8_t square, std::uint8_t piece);
 MoveList generateMoves(Board& board, std::uint8_t color);
-//MoveResult makeMove(Board& board, Move& move);
+void makeMove(Board& board, const Move& move);
 

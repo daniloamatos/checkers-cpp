@@ -41,6 +41,7 @@ int main()
 
     int turn = WHITEPIECE;
     int selectedSquare = -1;
+    int winner = -1;
     std::array<int, boardSides * boardSides> pieceAtSquare;
     pieceAtSquare.fill(-1);
 
@@ -56,20 +57,30 @@ int main()
         board.byType[type] |= mask;
     };
 
-    for (int row = 0; row < boardSides; ++row)
+    // Restore the starting position and clear the previous result.
+    auto resetGame = [&]()
     {
-        for (int col = 0; col < boardSides; ++col)
+        board = Board{};
+        turn = WHITEPIECE;
+        board.turn = turn;
+        selectedSquare = -1;
+        winner = -1;
+        for (int row = 0; row < boardSides; ++row)
         {
-            if ((row + col) % 2 == 1)
+            for (int col = 0; col < boardSides; ++col)
             {
-                const int square = row * boardSides + col;
-                if (row < 3)
-                    put(BLACKPIECE, MAN, square);
-                else if (row >= 5)
-                    put(WHITEPIECE, MAN, square);
+                if ((row + col) % 2 == 1)
+                {
+                    const int square = row * boardSides + col;
+                    if (row < 3)
+                        put(BLACKPIECE, MAN, square);
+                    else if (row >= 5)
+                        put(WHITEPIECE, MAN, square);
+                }
             }
         }
-    }
+    };
+    resetGame();
 
     auto drawSquare = [&](int square)
     {
@@ -117,7 +128,28 @@ int main()
             boardSize * scale
         };
 
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && scale > 0)
+        const float dialogWidth = std::min(400.0f, GetScreenWidth() - 32.0f);
+        const Rectangle victoryDialog = {
+            (GetScreenWidth() - dialogWidth) / 2.0f,
+            (GetScreenHeight() - 220.0f) / 2.0f,
+            dialogWidth, 220.0f
+        };
+        const Rectangle restartButton = {
+            victoryDialog.x + 24, victoryDialog.y + 138,
+            victoryDialog.width - 48, 56
+        };
+
+        // Once the game ends, only the restart button accepts clicks.
+        if (winner != -1)
+        {
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                CheckCollisionPointRec(GetMousePosition(), restartButton))
+            {
+                resetGame();
+                availableMoves = generateMoves(board, turn);
+            }
+        }
+        else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && scale > 0)
         {
             const Vector2 mouse = GetMousePosition();
             const float x = (mouse.x - boardArea.x) / scale;
@@ -128,31 +160,26 @@ int main()
                 const int row = static_cast<int>(y) / tileSize;
                 const int square = row * boardSides + col;
                 const int textureIndex = pieceAtSquare[square];
+                bool moved = false;
                 if (selectedSquare != -1)
                 {
-                    for (std::size_t i = 0; i < availableMoves.count; ++i) {
-                        if (availableMoves.moves[i].from == square) {
-                            selectedSquare = square;
-                            break;
-                        }
-
-                        if (availableMoves.moves[i].from == selectedSquare && availableMoves.moves[i].to == square) {
-                            setSquare(board, square, board.squares[selectedSquare]);
-                            setSquare(board, selectedSquare, 0);
-                            std::uint64_t captured = availableMoves.moves[i].capturedPieces;
-                            while (captured)
-                            {
-                                setSquare(board, __builtin_ctzll(captured), 0);
-                                captured &= captured - 1;
-                            }
+                    for (std::size_t i = 0; i < availableMoves.count; ++i)
+                    {
+                        if (availableMoves.moves[i].from == selectedSquare && availableMoves.moves[i].to == square)
+                        {
+                            makeMove(board, availableMoves.moves[i]);
                             selectedSquare = -1;
-                            turn ^= 1;
+                            turn = board.turn;
                             availableMoves = generateMoves(board, turn);
+                            // No pieces or no legal moves means the opponent loses.
+                            if (board.byColor[turn] == 0 || availableMoves.count == 0)
+                                winner = turn ^ 1;
+                            moved = true;
                             break;
                         }
                     }
                 }
-                if (textureIndex >= 0)
+                if (!moved && textureIndex >= 0)
                 {
                     const int color = textureIndex < 2 ? BLACKPIECE : WHITEPIECE;
                     if (color == turn)
@@ -164,6 +191,7 @@ int main()
             }
         }
 
+        // Redraw only squares that changed since the last frame.
         BeginTextureMode(boardCanvas);
         for (int square = 0; square < boardSides * boardSides; ++square)
         {
@@ -186,7 +214,7 @@ int main()
 
                 DrawRectangleRounded(area, 0.08f, 8, Color{32, 37, 47, 255});
 
-                // Impede que o texto ultrapasse o painel em janelas menores.
+                // Keep text inside the panel on smaller windows.
                 BeginScissorMode(
                     static_cast<int>(area.x),
                     static_cast<int>(area.y),
@@ -206,7 +234,7 @@ int main()
 
             const float padding = 16.0f;
 
-            // Janela larga: painéis nas laterais.
+            // Place panels beside the board in wide windows.
             if (boardArea.x >= 152)
             {
                 drawPanel(
@@ -215,10 +243,10 @@ int main()
                         boardArea.x - 2 * padding,
                         GetScreenHeight() - 2 * padding
                     },
-                    "JOGADORES",
-                    turn == WHITEPIECE ? "Sua vez" : "Vez das pretas",
-                    "Voce - Brancas\n\nComputador - Pretas\n\n"
-                    "Tempo\n--:--\n\nDificuldade\nEm breve"
+                    "PLAYERS",
+                    turn == WHITEPIECE ? "Your turn" : "Black's turn",
+                    "You - White\n\nComputer - Black\n\n"
+                    "Time\n--:--\n\nDifficulty\nComing soon"
                 );
 
                 drawPanel(
@@ -228,14 +256,14 @@ int main()
                         boardArea.x - 2 * padding,
                         GetScreenHeight() - 2 * padding
                     },
-                    "PARTIDA",
-                    "Historico",
-                    "Nenhum lance registrado\n\n"
-                    "Pecas capturadas\n--\n\n"
-                    "F11 - Tela cheia"
+                    "GAME",
+                    "History",
+                    "No moves recorded\n\n"
+                    "Captured pieces\n--\n\n"
+                    "F11 - Fullscreen"
                 );
             }
-            // Janela alta: painel abaixo do tabuleiro.
+            // Place the panel below the board in tall windows.
             else if (boardArea.y >= 132)
             {
                 drawPanel(
@@ -245,9 +273,9 @@ int main()
                         GetScreenWidth() - 2 * padding,
                         boardArea.y - 2 * padding
                     },
-                    "PARTIDA",
-                    turn == WHITEPIECE ? "Sua vez - Brancas" : "Vez das pretas",
-                    "Historico e pecas capturadas em breve"
+                    "GAME",
+                    turn == WHITEPIECE ? "Your turn - White" : "Black's turn",
+                    "History and captured pieces coming soon"
                 );
             }
             DrawTexturePro(boardCanvas.texture,
@@ -268,15 +296,28 @@ int main()
                     Color{0, 0, 255, 100}
                 );
 
+                // Show final destinations in green and intermediate landings in amber.
+                std::uint64_t destinations = 0;
+                std::uint64_t intermediateSquares = 0;
                 for (std::size_t i = 0; i < availableMoves.count; ++i)
                 {
                     const Move& move = availableMoves.moves[i];
                     if (move.from != selectedSquare)
                         continue;
 
-                    const int destCol = move.to % boardSides;
-                    const int destRow = move.to / boardSides;
-
+                    destinations |= 1ULL << move.to;
+                    if (move.capturedPieces != 0)
+                        intermediateSquares |= move.landingSquares & ~(1ULL << move.to);
+                }
+                // Final destinations take priority when different routes share a square.
+                intermediateSquares &= ~destinations;
+                std::uint64_t highlighted = destinations | intermediateSquares;
+                while (highlighted)
+                {
+                    const int square = __builtin_ctzll(highlighted);
+                    const int destCol = square % boardSides;
+                    const int destRow = square / boardSides;
+                    const bool isDestination = (destinations & (1ULL << square)) != 0;
                     DrawRectangleRec(
                         Rectangle{
                             boardArea.x + destCol * tileSize * scale,
@@ -284,11 +325,35 @@ int main()
                             tileSize * scale,
                             tileSize * scale
                         },
-                        Color{0, 255, 0, 100}
+                        isDestination ? Color{0, 255, 0, 100} : Color{255, 190, 60, 70}
                     );
+                    highlighted &= highlighted - 1;
                 }
             }
 
+            if (winner != -1)
+            {
+                DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Color{0, 0, 0, 180});
+                DrawRectangleRounded(victoryDialog, 0.08f, 8, Color{32, 37, 47, 255});
+                const char* title = winner == WHITEPIECE ? "White wins!" : "Black wins!";
+                const int titleSize = 24;
+                DrawText(title,
+                         static_cast<int>(victoryDialog.x + (victoryDialog.width - MeasureText(title, titleSize)) / 2),
+                         static_cast<int>(victoryDialog.y + 32), titleSize, RAYWHITE);
+                const char* message = board.byColor[turn] == 0
+                    ? "Your opponent has no pieces."
+                    : "Your opponent has no moves.";
+                DrawText(message,
+                         static_cast<int>(victoryDialog.x + (victoryDialog.width - MeasureText(message, 16)) / 2),
+                         static_cast<int>(victoryDialog.y + 82), 16, Color{175, 182, 195, 255});
+                const bool hovered = CheckCollisionPointRec(GetMousePosition(), restartButton);
+                DrawRectangleRounded(restartButton, 0.15f, 8,
+                                     hovered ? Color{105, 200, 145, 255} : Color{75, 170, 115, 255});
+                DrawText("Restart",
+                         static_cast<int>(restartButton.x + (restartButton.width - MeasureText("Restart", 22)) / 2),
+                         static_cast<int>(restartButton.y + (restartButton.height - 22) / 2),
+                         22, Color{22, 25, 32, 255});
+            }
         EndDrawing();
     }
 
