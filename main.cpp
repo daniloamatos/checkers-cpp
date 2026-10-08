@@ -202,7 +202,17 @@ int main()
             }
         }
         EndTextureMode();
+        if (turn == BLACKPIECE && winner == -1 && availableMoves.count > 0)
+        {
+            Move bestMove = availableMoves.moves[0];
+            negamax(board, 5, BLACKPIECE, &bestMove);
+            makeMove(board, bestMove);
+            turn = board.turn;
+            availableMoves = generateMoves(board, turn);
 
+            if (availableMoves.count == 0)
+                winner = turn ^ 1;
+        }
         BeginDrawing();
             ClearBackground(Color{22, 25, 32, 255});
 

@@ -52,4 +52,4 @@ struct MoveList {
 void setSquare(Board& board, std::uint8_t square, std::uint8_t piece);
 MoveList generateMoves(Board& board, std::uint8_t color);
 void makeMove(Board& board, const Move& move);
-
+int negamax(Board board, std::uint8_t depth, std::uint8_t color, Move* bestMove = nullptr);

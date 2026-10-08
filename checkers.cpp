@@ -1,6 +1,52 @@
 #include "main.h"
 #include <algorithm>
+#include <iostream>
+#include <limits>
 
+
+int evaluate(const Board& board, std::uint8_t color)
+{
+    const std::uint64_t own = board.byColor[color];
+    const std::uint64_t enemy = board.byColor[color ^ 1];
+
+    const int men =
+        __builtin_popcountll(own & board.byType[MAN]) -
+        __builtin_popcountll(enemy & board.byType[MAN]);
+
+    const int kings =
+        __builtin_popcountll(own & board.byType[KING]) -
+        __builtin_popcountll(enemy & board.byType[KING]);
+
+    return men * 100 + kings * 175;
+}
+
+int negamax(Board board, std::uint8_t depth, std::uint8_t color,  Move* bestMove)
+{
+    MoveList moves = generateMoves(board, color);
+    int maxEval = -100000;
+    if (moves.count == 0)
+    {
+        return -100000;
+    }
+    if (depth == 0)
+    {
+        return evaluate(board, color);
+    }
+    for (std::size_t i = 0; i < moves.count; ++i)
+    {
+        Board nextBoard = board;
+        makeMove(nextBoard, moves.moves[i]);
+
+        int score = -negamax(nextBoard, depth - 1 , color ^ 1);
+        if (score > maxEval)
+        {
+            maxEval = score;
+            if (bestMove != nullptr)
+                *bestMove = moves.moves[i];
+        }
+    }
+    return maxEval;
+};
 // Keep the square and all piece masks in sync.
 void setSquare(Board& board, std::uint8_t square, std::uint8_t piece)
 {
