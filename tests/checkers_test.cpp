@@ -159,6 +159,103 @@ int main()
     assert(longSearch.squares[17] == KING);
     assert(longSearch.squares[46] == ((BLACKPIECE << 3) | KING));
 
+    // Undo removes only the pending human move, or a completed pair of moves.
+    Board game{};
+    setSquare(game, 42, KING);
+    setSquare(game, 21, (BLACKPIECE << 3) | KING);
+    game.turn = WHITEPIECE;
+    GameHistory history;
+    history.reset(game);
+    auto play = [&](int from, int to) {
+        const MoveList legal = generateMoves(game, game.turn);
+        const auto found = std::find_if(legal.moves.begin(), legal.moves.begin() + legal.count,
+            [&](const Move& move) { return move.from == from && move.to == to; });
+        assert(found != legal.moves.begin() + legal.count);
+        const Move move = *found;
+        makeMove(game, move);
+        history.record(game, move);
+    };
+    play(42, 33);
+    play(21, 30);
+    play(33, 42);
+    assert(history.undoTurn());
+    assert(history.entries.size() == 3);
+    assert(history.entries.back().board.turn == WHITEPIECE);
+    assert(history.entries.back().board.squares[33] == KING);
+    assert(history.undoTurn());
+    assert(history.entries.size() == 1);
+    assert(history.entries.back().board.squares[42] == KING);
+    assert(!history.undoTurn());
+
+    // The third occurrence includes the same side to move.
+    game = history.entries.back().board;
+    for (int cycle = 0; cycle < 2; ++cycle)
+    {
+        play(42, 33);
+        play(21, 30);
+        play(33, 42);
+        play(30, 21);
+        assert(history.drawReason() == (cycle == 0 ? DrawReason::None : DrawReason::Repetition));
+    }
+    assert(history.undoTurn());
+    assert(history.drawReason() == DrawReason::None);
+
+    // Distinct synthetic positions isolate the 80-ply no-progress threshold.
+    GameHistory quietHistory;
+    Board quietBoard{};
+    setSquare(quietBoard, 42, KING);
+    setSquare(quietBoard, 21, (BLACKPIECE << 3) | KING);
+    quietBoard.turn = WHITEPIECE;
+    quietHistory.reset(quietBoard);
+    const std::array<int, 20> firstMarkers = {
+        1, 3, 5, 7, 8, 10, 12, 14, 17, 19,
+        23, 24, 26, 28, 30, 33, 35, 37, 39, 40
+    };
+    const std::array<int, 4> secondMarkers = {44, 46, 49, 51};
+    for (int ply = 0; ply < 80; ++ply)
+    {
+        const int movingSquare = quietBoard.turn == WHITEPIECE ? 42 : 21;
+        Board next{};
+        setSquare(next, 42, KING);
+        setSquare(next, 21, (BLACKPIECE << 3) | KING);
+        setSquare(next, firstMarkers[ply % 20], KING);
+        setSquare(next, secondMarkers[ply / 20], (BLACKPIECE << 3) | KING);
+        next.turn = quietBoard.turn ^ 1;
+        quietHistory.record(next, Move{static_cast<std::uint8_t>(movingSquare),
+                                       static_cast<std::uint8_t>(movingSquare)});
+        quietBoard = next;
+        assert(quietHistory.drawReason() == (ply == 79 ? DrawReason::NoProgress : DrawReason::None));
+    }
+
+    // Moving a man or capturing restarts the no-progress count.
+    Board progressGame{};
+    setSquare(progressGame, 42, KING);
+    setSquare(progressGame, 53, MAN);
+    setSquare(progressGame, 21, (BLACKPIECE << 3) | KING);
+    progressGame.turn = WHITEPIECE;
+    GameHistory progressHistory;
+    progressHistory.reset(progressGame);
+    for (const Move move : {Move{42, 33}, Move{21, 30}, Move{53, 44}})
+    {
+        makeMove(progressGame, move);
+        progressHistory.record(progressGame, move);
+    }
+    assert(progressHistory.entries[2].quietPlies == 2);
+    assert(progressHistory.entries.back().quietPlies == 0);
+
+    Board captureGame{};
+    setSquare(captureGame, 26, (BLACKPIECE << 3) | KING);
+    setSquare(captureGame, 35, MAN);
+    captureGame.turn = BLACKPIECE;
+    GameHistory captureHistory;
+    captureHistory.reset(captureGame);
+    captureHistory.entries.back().quietPlies = 4;
+    const Move capture = generateMoves(captureGame, BLACKPIECE).moves[0];
+    assert(capture.from == 26 && capture.to == 44 && capture.capturedPieces == (1ULL << 35));
+    makeMove(captureGame, capture);
+    captureHistory.record(captureGame, capture);
+    assert(captureHistory.entries.back().quietPlies == 0);
+
     // Same endpoint, different captures: either option must remain playable.
     Board alternatives{};
     setSquare(alternatives, 21, KING);

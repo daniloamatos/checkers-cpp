@@ -4,14 +4,24 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <string>
 #include "main.h"
 #include <lunasvg.h>
+
+enum class GameOutcome {
+    Playing,
+    WhiteWins,
+    BlackWins,
+    RepetitionDraw,
+    NoProgressDraw
+};
 
 int main()
 {
     constexpr int boardSize = 800;
     constexpr int boardSides = 8;
     constexpr int tileSize = boardSize / boardSides;
+    constexpr float toolbarHeight = 48.0f;
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(boardSize, boardSize, "Checkers");
@@ -49,17 +59,23 @@ int main()
         pieceTextures[i] = LoadTextureFromImage(image);
     }
 
-    int turn = WHITEPIECE;
     int selectedSquare = -1;
-    int winner = -1;
+    GameOutcome outcome = GameOutcome::Playing;
     std::vector<Move> captureChoices;
     std::size_t captureChoice = 0;
     std::future<Move> botSearch;
     auto cancelSearch = std::make_shared<std::atomic<bool>>(false);
-    std::array<int, boardSides * boardSides> pieceAtSquare;
-    pieceAtSquare.fill(-1);
 
     Board board{};
+    GameHistory history;
+
+    auto stopBotSearch = [&]()
+    {
+        cancelSearch->store(true);
+        if (botSearch.valid())
+            botSearch.get();
+        cancelSearch->store(false);
+    };
 
     auto put = [&](int color, int type, int square)
     {
@@ -74,11 +90,11 @@ int main()
     // Restore the starting position and clear the previous result.
     auto resetGame = [&]()
     {
+        stopBotSearch();
         board = Board{};
-        turn = WHITEPIECE;
-        board.turn = turn;
+        board.turn = WHITEPIECE;
         selectedSquare = -1;
-        winner = -1;
+        outcome = GameOutcome::Playing;
         captureChoices.clear();
         captureChoice = 0;
         for (int row = 0; row < boardSides; ++row)
@@ -95,6 +111,7 @@ int main()
                 }
             }
         }
+        history.reset(board);
     };
     resetGame();
 
@@ -113,7 +130,6 @@ int main()
         const int piece = board.squares[square];
         const int textureIndex = piece == 0 ? -1
             : ((piece >> 3) == BLACKPIECE ? 0 : 2) + (piece & 7) - 1;
-        pieceAtSquare[square] = textureIndex;
         if (textureIndex >= 0 && pieceTextures[textureIndex].id != 0)
             DrawTexture(pieceTextures[textureIndex], col * tileSize, row * tileSize, WHITE);
         else if (piece != 0)
@@ -143,13 +159,21 @@ int main()
     {
         const Move move = chosen;
         makeMove(board, move);
+        history.record(board, move);
         selectedSquare = -1;
         captureChoices.clear();
         captureChoice = 0;
-        turn = board.turn;
-        availableMoves = generateMoves(board, turn);
+        availableMoves = generateMoves(board, board.turn);
         if (availableMoves.count == 0)
-            winner = turn ^ 1;
+            outcome = board.turn == WHITEPIECE ? GameOutcome::BlackWins : GameOutcome::WhiteWins;
+        else
+        {
+            const DrawReason draw = history.drawReason();
+            if (draw == DrawReason::Repetition)
+                outcome = GameOutcome::RepetitionDraw;
+            else if (draw == DrawReason::NoProgress)
+                outcome = GameOutcome::NoProgressDraw;
+        }
     };
 
     while (!WindowShouldClose())
@@ -157,14 +181,41 @@ int main()
         if (IsKeyPressed(KEY_F11))
             ToggleBorderlessWindowed();
 
-        // Fit the board to the window without changing its proportions.
+        const bool controlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+        const Rectangle newGameButton = {
+            static_cast<float>(GetScreenWidth()) - 132.0f, 7.0f, 124.0f, 34.0f
+        };
+        const bool mousePressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        const bool newGameRequested = (controlDown && IsKeyPressed(KEY_N)) ||
+            (mousePressed && CheckCollisionPointRec(GetMousePosition(), newGameButton));
+        if (newGameRequested)
+        {
+            resetGame();
+            availableMoves = generateMoves(board, board.turn);
+        }
+        else if (controlDown && IsKeyPressed(KEY_Z))
+        {
+            if (history.entries.size() > 1)
+            {
+                stopBotSearch();
+                history.undoTurn();
+                board = history.entries.back().board;
+                outcome = GameOutcome::Playing;
+                selectedSquare = -1;
+                captureChoices.clear();
+                captureChoice = 0;
+                availableMoves = generateMoves(board, board.turn);
+            }
+        }
+
+        // Keep space for the controls above the board.
         const float scale = std::min(
             GetScreenWidth() / static_cast<float>(boardSize),
-            GetScreenHeight() / static_cast<float>(boardSize)
+            (GetScreenHeight() - toolbarHeight) / static_cast<float>(boardSize)
         );
         const Rectangle boardArea = {
             (GetScreenWidth() - boardSize * scale) / 2.0f,
-            (GetScreenHeight() - boardSize * scale) / 2.0f,
+            toolbarHeight + (GetScreenHeight() - toolbarHeight - boardSize * scale) / 2.0f,
             boardSize * scale,
             boardSize * scale
         };
@@ -175,32 +226,35 @@ int main()
             (GetScreenHeight() - 220.0f) / 2.0f,
             dialogWidth, 220.0f
         };
-        const Rectangle restartButton = {
+        const Rectangle restartDialogButton = {
             victoryDialog.x + 24, victoryDialog.y + 138,
             victoryDialog.width - 48, 56
         };
 
         const float choiceWidth = std::min(360.0f, GetScreenWidth() - 16.0f);
-        const Rectangle choicePanel = {(GetScreenWidth() - choiceWidth) / 2, 8, choiceWidth, 108};
+        const Rectangle choicePanel = {(GetScreenWidth() - choiceWidth) / 2, toolbarHeight + 8, choiceWidth, 108};
         const float buttonWidth = (choiceWidth - 40) / 4;
-        const Rectangle previousButton = {choicePanel.x + 8, 72, buttonWidth, 34};
-        const Rectangle nextButton = {previousButton.x + buttonWidth + 8, 72, buttonWidth, 34};
-        const Rectangle confirmButton = {nextButton.x + buttonWidth + 8, 72, buttonWidth, 34};
-        const Rectangle cancelButton = {confirmButton.x + buttonWidth + 8, 72, buttonWidth, 34};
+        const Rectangle previousButton = {choicePanel.x + 8, choicePanel.y + 64, buttonWidth, 34};
+        const Rectangle nextButton = {previousButton.x + buttonWidth + 8, previousButton.y, buttonWidth, 34};
+        const Rectangle confirmButton = {nextButton.x + buttonWidth + 8, nextButton.y, buttonWidth, 34};
+        const Rectangle cancelButton = {confirmButton.x + buttonWidth + 8, confirmButton.y, buttonWidth, 34};
 
         // Dialogs handle clicks before the board does.
-        if (winner != -1)
+        if (newGameRequested)
         {
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-                CheckCollisionPointRec(GetMousePosition(), restartButton))
+            // The same click must not also select a square.
+        }
+        else if (outcome != GameOutcome::Playing)
+        {
+            if (mousePressed && CheckCollisionPointRec(GetMousePosition(), restartDialogButton))
             {
                 resetGame();
-                availableMoves = generateMoves(board, turn);
+                availableMoves = generateMoves(board, board.turn);
             }
         }
         else if (!captureChoices.empty())
         {
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+            if (mousePressed)
             {
                 const Vector2 mouse = GetMousePosition();
                 if (CheckCollisionPointRec(mouse, previousButton))
@@ -213,7 +267,7 @@ int main()
                     captureChoices.clear();
             }
         }
-        else if (turn == WHITEPIECE && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && scale > 0)
+        else if (board.turn == WHITEPIECE && mousePressed && scale > 0)
         {
             const Vector2 mouse = GetMousePosition();
             // Convert the click to board coordinates.
@@ -224,7 +278,7 @@ int main()
                 const int col = static_cast<int>(x) / tileSize;
                 const int row = static_cast<int>(y) / tileSize;
                 const int square = row * boardSides + col;
-                const int textureIndex = pieceAtSquare[square];
+                const int piece = board.squares[square];
                 bool matched = false;
                 if (selectedSquare != -1)
                 {
@@ -247,16 +301,16 @@ int main()
                     if (captureChoices.size() == 1)
                         playMove(captureChoices.front());
                 }
-                if (!matched && textureIndex >= 0)
+                if (!matched && piece != 0)
                 {
-                    const int color = textureIndex < 2 ? BLACKPIECE : WHITEPIECE;
-                    if (color == turn)
+                    const int color = piece >> 3;
+                    if (color == board.turn)
                         selectedSquare = square;
                 }
             }
         }
 
-        if (turn == BLACKPIECE && winner == -1 && availableMoves.count > 0)
+        if (board.turn == BLACKPIECE && outcome == GameOutcome::Playing && availableMoves.count > 0)
         {
             if (!botSearch.valid())
             {
@@ -298,6 +352,27 @@ int main()
 
         BeginDrawing();
             ClearBackground(Color{22, 25, 32, 255});
+            DrawRectangle(0, 0, GetScreenWidth(), static_cast<int>(toolbarHeight),
+                          Color{32, 37, 47, 255});
+            DrawText("Checkers", 16, 11, 24, RAYWHITE);
+            const bool newGameHovered = CheckCollisionPointRec(GetMousePosition(), newGameButton);
+            DrawRectangleRounded(newGameButton, 0.15f, 8,
+                                 newGameHovered ? Color{105, 200, 145, 255} : Color{75, 170, 115, 255});
+            DrawText("New game", static_cast<int>(newGameButton.x + 16),
+                     static_cast<int>(newGameButton.y + 8), 18, Color{22, 25, 32, 255});
+
+            std::string historyText = "Moves: " + std::to_string(history.entries.size() - 1);
+            const std::size_t firstShown = history.entries.size() > 7
+                ? history.entries.size() - 6 : 1;
+            for (std::size_t i = firstShown; i < history.entries.size(); ++i)
+            {
+                const Move& move = history.entries[i].move;
+                historyText += "\n" + std::to_string(i) + ". " +
+                    std::to_string(move.from) +
+                    (move.capturedPieces ? "x" : "-") + std::to_string(move.to);
+            }
+            const std::string gamePanelText = historyText +
+                "\n\nCaptured pieces\n--\n\nF11 - Fullscreen";
 
             auto drawPanel = [](Rectangle area, const char* title,
                                 const char* subtitle, const char* text)
@@ -332,12 +407,12 @@ int main()
             {
                 drawPanel(
                     Rectangle{
-                        padding, padding,
+                        padding, toolbarHeight + padding,
                         boardArea.x - 2 * padding,
-                        GetScreenHeight() - 2 * padding
+                        GetScreenHeight() - toolbarHeight - 2 * padding
                     },
                     "PLAYERS",
-                    turn == WHITEPIECE ? "Your turn" : "Black's turn",
+                    board.turn == WHITEPIECE ? "Your turn" : "Black's turn",
                     "You - White\n\nComputer - Black\n\n"
                     "Time\n--:--\n\nDifficulty\nComing soon"
                 );
@@ -345,30 +420,29 @@ int main()
                 drawPanel(
                     Rectangle{
                         boardArea.x + boardArea.width + padding,
-                        padding,
+                        toolbarHeight + padding,
                         boardArea.x - 2 * padding,
-                        GetScreenHeight() - 2 * padding
+                        GetScreenHeight() - toolbarHeight - 2 * padding
                     },
                     "GAME",
                     "History",
-                    "No moves recorded\n\n"
-                    "Captured pieces\n--\n\n"
-                    "F11 - Fullscreen"
+                    gamePanelText.c_str()
                 );
             }
             // Place the panel below the board in tall windows.
-            else if (boardArea.y >= 132)
+            else if (GetScreenHeight() - boardArea.y - boardArea.height >= 132)
             {
+                const float bottomSpace = GetScreenHeight() - boardArea.y - boardArea.height;
                 drawPanel(
                     Rectangle{
                         padding,
                         boardArea.y + boardArea.height + padding,
                         GetScreenWidth() - 2 * padding,
-                        boardArea.y - 2 * padding
+                        bottomSpace - 2 * padding
                     },
                     "GAME",
-                    turn == WHITEPIECE ? "Your turn - White" : "Black's turn",
-                    "History and captured pieces coming soon"
+                    board.turn == WHITEPIECE ? "Your turn - White" : "Black's turn",
+                    historyText.c_str()
                 );
             }
             DrawTexturePro(boardCanvas.texture,
@@ -462,27 +536,32 @@ int main()
                 drawChoiceButton(cancelButton, "Cancel");
             }
 
-            if (winner != -1)
+            if (outcome != GameOutcome::Playing)
             {
                 DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Color{0, 0, 0, 180});
                 DrawRectangleRounded(victoryDialog, 0.08f, 8, Color{32, 37, 47, 255});
-                const char* title = winner == WHITEPIECE ? "White wins!" : "Black wins!";
+                const char* title = outcome == GameOutcome::WhiteWins ? "White wins!" :
+                    outcome == GameOutcome::BlackWins ? "Black wins!" : "Draw!";
                 const int titleSize = 24;
                 DrawText(title,
                          static_cast<int>(victoryDialog.x + (victoryDialog.width - MeasureText(title, titleSize)) / 2),
                          static_cast<int>(victoryDialog.y + 32), titleSize, RAYWHITE);
-                const char* message = board.byColor[turn] == 0
-                    ? (turn == WHITEPIECE ? "White has no pieces left." : "Black has no pieces left.")
-                    : (turn == WHITEPIECE ? "White has no legal moves." : "Black has no legal moves.");
+                const char* message = outcome == GameOutcome::RepetitionDraw
+                    ? "Same position occurred three times."
+                    : outcome == GameOutcome::NoProgressDraw
+                    ? "40 moves each without progress."
+                    : board.byColor[board.turn] == 0
+                    ? (board.turn == WHITEPIECE ? "White has no pieces left." : "Black has no pieces left.")
+                    : (board.turn == WHITEPIECE ? "White has no legal moves." : "Black has no legal moves.");
                 DrawText(message,
                          static_cast<int>(victoryDialog.x + (victoryDialog.width - MeasureText(message, 16)) / 2),
                          static_cast<int>(victoryDialog.y + 82), 16, Color{175, 182, 195, 255});
-                const bool hovered = CheckCollisionPointRec(GetMousePosition(), restartButton);
-                DrawRectangleRounded(restartButton, 0.15f, 8,
+                const bool hovered = CheckCollisionPointRec(GetMousePosition(), restartDialogButton);
+                DrawRectangleRounded(restartDialogButton, 0.15f, 8,
                                      hovered ? Color{105, 200, 145, 255} : Color{75, 170, 115, 255});
                 DrawText("Restart",
-                         static_cast<int>(restartButton.x + (restartButton.width - MeasureText("Restart", 22)) / 2),
-                         static_cast<int>(restartButton.y + (restartButton.height - 22) / 2),
+                         static_cast<int>(restartDialogButton.x + (restartDialogButton.width - MeasureText("Restart", 22)) / 2),
+                         static_cast<int>(restartDialogButton.y + (restartDialogButton.height - 22) / 2),
                          22, Color{22, 25, 32, 255});
             }
         EndDrawing();

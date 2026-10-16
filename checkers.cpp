@@ -365,7 +365,7 @@ void generateKingMoves(const Board& board, std::uint8_t color, MoveList& moves)
     }
 }
 
-MoveList generateMoves(Board& board, std::uint8_t color)
+MoveList generateMoves(const Board& board, std::uint8_t color)
 {
     MoveList moves;
     generateManMoves(board, color, board.byType[OCCUPIED], moves);
@@ -400,4 +400,49 @@ void makeMove(Board& board, const Move& move)
         piece = (color << 3) | KING;
     setSquare(board, move.to, piece);
     board.turn = color ^ 1;
+}
+
+void GameHistory::reset(const Board& board)
+{
+    entries.clear();
+    entries.push_back(HistoryEntry{board, Move{}, 0});
+}
+
+void GameHistory::record(const Board& board, const Move& move)
+{
+    const HistoryEntry& previous = entries.back();
+    const bool progress = move.capturedPieces != 0 ||
+        (previous.board.squares[move.from] & 7) == MAN;
+    entries.push_back(HistoryEntry{board, move, progress ? 0 : previous.quietPlies + 1});
+}
+
+bool GameHistory::undoTurn()
+{
+    if (entries.size() <= 1)
+        return false;
+
+    // Return to the last position where the human can move.
+    do {
+        entries.pop_back();
+    } while (entries.size() > 1 && entries.back().board.turn != WHITEPIECE);
+    return true;
+}
+
+DrawReason GameHistory::drawReason() const
+{
+    const HistoryEntry& current = entries.back();
+    int occurrences = 0;
+    for (const HistoryEntry& entry : entries)
+    {
+        if (entry.board.turn == current.board.turn &&
+            std::equal(std::begin(entry.board.squares), std::end(entry.board.squares),
+                       std::begin(current.board.squares)))
+        {
+            if (++occurrences == 3)
+                return DrawReason::Repetition;
+        }
+    }
+    if (current.quietPlies >= 80)
+        return DrawReason::NoProgress;
+    return DrawReason::None;
 }

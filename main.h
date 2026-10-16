@@ -57,7 +57,28 @@ struct SearchControl {
     const std::atomic<bool>* cancelled = nullptr;
 };
 
+enum class DrawReason {
+    None,
+    Repetition,
+    NoProgress
+};
+
+struct HistoryEntry {
+    Board board;
+    Move move;
+    int quietPlies;
+};
+
+struct GameHistory {
+    std::vector<HistoryEntry> entries;
+
+    void reset(const Board& board);
+    void record(const Board& board, const Move& move);
+    bool undoTurn();
+    DrawReason drawReason() const;
+};
+
 void setSquare(Board& board, std::uint8_t square, std::uint8_t piece);
-MoveList generateMoves(Board& board, std::uint8_t color);
+MoveList generateMoves(const Board& board, std::uint8_t color);
 void makeMove(Board& board, const Move& move);
 int negamax(Board board, int depth, std::uint8_t color, int alpha, int beta, Move* bestMove, int ply, SearchControl* control = nullptr);
